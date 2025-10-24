@@ -1,7 +1,8 @@
 const { db } = require("../core/db");
 const {
-    upsertBrand, upsertCategoryPath, upsertProduct, linkProductToCategories,
-    upsertSupplierOffer, setProductProperty, addImages
+    upsertBrand, upsertProduct, linkProductToCategories,
+    upsertSupplierOffer, setProductProperty, addImages,
+    getOrCreateCategoryBySupplierPath
 } = require("../core/upsert");
 const { fetchWithTimeout } = require("../core/http");
 require("dotenv").config();
@@ -105,7 +106,8 @@ async function runMHI(batchId) {
             // Бренд тут всегда MHI, но иногда в фидах не указан — проставим явно
             const brandId = upsertBrand("Mitsubishi Heavy Industries");
 
-            const catIds = upsertCategoryPath(categoryPath(item));
+            const catIds = getOrCreateCategoryBySupplierPath(supplierId, categoryPath(item));
+
 
             // У MHI есть коды: ID (число), CODE (slug). Берём ID как supplierSku (стабилен).
             const supplierSku = STR(item.ID) || STR(item.CODE) || title;

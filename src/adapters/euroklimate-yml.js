@@ -2,12 +2,15 @@ const { fetchWithTimeout } = require("../core/http");
 const { XMLParser } = require("fast-xml-parser");
 const { db } = require("../core/db");
 const {
-    upsertBrand, upsertCategoryPath, upsertProduct, linkProductToCategories,
-    upsertSupplierOffer, setProductProperty, addImages
+    upsertBrand, upsertProduct, linkProductToCategories,
+    upsertSupplierOffer, setProductProperty, addImages,
+    getOrCreateCategoryBySupplierPath
 } = require("../core/upsert");
 require("dotenv").config();
 
-const DEC = v => v == null ? null : (n => Number.isFinite(n) ? n : null)(Number(String(v).replace(/\s+/g, "").replace(",", ".")));
+const DEC = v => v == null ? null : (n => Number.isFinite(n) ? n : null)(
+    Number(String(v).replace(/\s+/g, "").replace(",", "."))
+);
 const STR = v => v == null ? null : String(v).trim();
 const normCurrency = cur => !cur ? "RUB" : (cur.toUpperCase() === "RUR" ? "RUB" : cur.toUpperCase());
 
@@ -23,13 +26,16 @@ async function runEuroklimate(batchId) {
     const logStmt = db.prepare(`INSERT INTO import_log(supplier_id, batch_id, status, message) VALUES (?,?,?,?)`);
 
     try {
-        const res = await fetchWithTimeout(url, 30000);
+        const res = await fetchWithTimeout(url, 60000);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const xml = await res.text();
 
         const parser = new XMLParser({
-            ignoreAttributes: false, attributeNamePrefix: "@_",
-            textNodeName: "#text", parseTagValue: false, parseAttributeValue: false,
+            ignoreAttributes: false,
+            attributeNamePrefix: "@_",
+            textNodeName: "#text",
+            parseTagValue: false,
+            parseAttributeValue: false,
             trimValues: false
         });
         const yml = parser.parse(xml);
@@ -38,12 +44,14 @@ async function runEuroklimate(batchId) {
         const categories = [].concat(shop?.categories?.category || []);
         const offers = [].concat(shop?.offers?.offer || []);
 
+
         const catById = new Map();
         categories.forEach(c => catById.set(String(c["@_id"]), {
             id: String(c["@_id"]),
             name: String(c["#text"] ?? "").trim(),
             parentId: c["@_parentId"] ? String(c["@_parentId"]) : undefined
         }));
+
 
         function buildCategoryPath(leafId) {
             if (!leafId) return [];
@@ -66,7 +74,10 @@ async function runEuroklimate(batchId) {
 
             const price = DEC(off.price);
             const currency = normCurrency(STR(off.currencyId));
-            const catIds = upsertCategoryPath(buildCategoryPath(STR(off.categoryId)));
+
+
+            const catPath = buildCategoryPath(STR(off.categoryId));
+            const catIds = getOrCreateCategoryBySupplierPath(supplierId, catPath);
 
             const productId = upsertProduct({
                 sku: null,
@@ -89,8 +100,10 @@ async function runEuroklimate(batchId) {
                 dataJson: off
             });
 
+
             const pics = off.picture ? (Array.isArray(off.picture) ? off.picture : [off.picture]) : [];
             if (pics.length) addImages(productId, pics.filter(Boolean));
+
 
             const params = off.param ? (Array.isArray(off.param) ? off.param : [off.param]) : [];
             for (const p of params) {
@@ -100,6 +113,7 @@ async function runEuroklimate(batchId) {
                 const full = unit ? `${val} ${unit}`.trim() : val;
                 if (full) setProductProperty(productId, name, full);
             }
+
 
             if (off.document) {
                 const docs = Array.isArray(off.document) ? off.document : [off.document];
@@ -119,4 +133,5 @@ async function runEuroklimate(batchId) {
         throw e;
     }
 }
+
 module.exports = { runEuroklimate };

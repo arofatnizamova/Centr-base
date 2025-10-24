@@ -1,8 +1,9 @@
 const { fetchWithTimeout } = require("../core/http");
 const { db } = require("../core/db");
 const {
-    upsertBrand, upsertCategoryPath, upsertProduct, linkProductToCategories,
-    upsertSupplierOffer, setProductProperty, addImages
+    upsertBrand, upsertProduct, linkProductToCategories,
+    upsertSupplierOffer, setProductProperty, addImages,
+    getOrCreateCategoryBySupplierPath
 } = require("../core/upsert");
 require("dotenv").config();
 
@@ -46,7 +47,8 @@ async function runGeneralClimate(batchId) {
 
             const title = STR(item.NAME) ?? "Без названия";
             const brandId = upsertBrand(STR(item.BRAND) ?? undefined);
-            const catIds = upsertCategoryPath(categoryPath(item));
+            const catIds = getOrCreateCategoryBySupplierPath(supplierId, categoryPath(item));
+
 
             const { price, currency } = parsePrice(item.PRICE, item.PRICE_CURRENCY);
 

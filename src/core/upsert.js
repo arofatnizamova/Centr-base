@@ -94,6 +94,106 @@ function addImages(productId, urls) {
     const stmt = db.prepare(`INSERT INTO image(product_id, url, position) VALUES (?, ?, ?)`);
     urls.forEach((u, i) => stmt.run(productId, u, i));
 }
+// --- НОРМАЛИЗАЦИЯ ---
+function normName(s) {
+    return String(s)
+        .trim()
+        .replace(/\s+/g, " ")
+        .replace(/ё/g, "е")
+        .replace(/Ё/g, "Е")
+        .toLowerCase();
+}
+function normPath(arr) {
+    return arr.map(normName).filter(Boolean).join(">");
+}
+
+// --- ПОЛУЧИТЬ / СОЗДАТЬ КАТЕГОРИЮ С УЧЁТОМ МАППИНГА ПОСТАВЩИКА ---
+function getOrCreateCategoryBySupplierPath(supplierId, rawPathArr = []) {
+    const key = normPath(rawPathArr);
+    if (!key) return [];
+
+    // 1) проверить в supplier_category_map
+    const mapping = db.prepare(`
+    SELECT category_id FROM supplier_category_map
+    WHERE supplier_id = ? AND path = ?
+  `).get(supplierId, key);
+
+    if (mapping?.category_id) {
+        // восстановить всю иерархию до этого узла (или просто вернуть [category_id] если не требуется)
+        // Мы всё равно поддерживаем product_category как связь, достаточно вернуть хвостовую категорию.
+        return [mapping.category_id];
+    }
+
+    // 2) если нет маппинга — создать/найти путь в category (с нормализованными именами, но сохраняем "как пришло" в name)
+    let parentId = null;
+    let lastId = null;
+    for (const rawName of rawPathArr) {
+        if (!rawName) continue;
+        const name = String(rawName).trim();
+        // ищем по (normName, parentId)
+        const row = db.prepare(`
+      SELECT c.id
+      FROM category c
+      WHERE c.name_normalized = ? AND IFNULL(c.parent_id,0) = IFNULL(?,0)
+    `).get(normName(name), parentId ?? null);
+
+        if (row?.id) {
+            lastId = row.id;
+            parentId = row.id;
+        } else {
+            // если столбца name_normalized ещё нет — добавим (один раз)
+            try {
+                db.exec(`ALTER TABLE category ADD COLUMN name_normalized TEXT`);
+            } catch (e) {
+                // уже добавлен — ок
+            }
+            db.prepare(`
+        INSERT INTO category(name, parent_id, name_normalized)
+        VALUES (?, ?, ?)
+      `).run(name, parentId, normName(name));
+            lastId = db.prepare(`SELECT last_insert_rowid() AS id`).get().id;
+            parentId = lastId;
+        }
+    }
+
+    // 3) записать маппинг, чтобы в следующий раз сразу попадать в тот же category_id
+    if (lastId) {
+        db.prepare(`
+      INSERT OR IGNORE INTO supplier_category_map(supplier_id, path, category_id)
+      VALUES (?, ?, ?)
+    `).run(supplierId, key, lastId);
+        return [lastId];
+    }
+
+    return [];
+}
+
+// ПАТЧ: обновим upsertCategoryPath, чтобы он тоже использовал нормализацию (на будущее)
+function upsertCategoryPathNormalized(names = []) {
+    let parentId = null;
+    const ids = [];
+    // подготовим столбец normal, если ещё не создан
+    try {
+        db.exec(`ALTER TABLE category ADD COLUMN name_normalized TEXT`);
+    } catch (e) { }
+    for (const raw of names) {
+        if (!raw) continue;
+        const name = String(raw).trim();
+        const n = normName(name);
+        const existing = db.prepare(
+            `SELECT id FROM category WHERE name_normalized = ? AND IFNULL(parent_id,0)=IFNULL(?,0)`
+        ).get(n, parentId ?? null);
+        let id = existing?.id;
+        if (!id) {
+            db.prepare(`INSERT INTO category(name, parent_id, name_normalized) VALUES (?, ?, ?)`)
+                .run(name, parentId, n);
+            id = db.prepare(`SELECT last_insert_rowid() AS id`).get().id;
+        }
+        ids.push(id);
+        parentId = id;
+    }
+    return ids;
+}
 
 module.exports = {
     upsertBrand,
@@ -102,5 +202,9 @@ module.exports = {
     linkProductToCategories,
     upsertSupplierOffer,
     setProductProperty,
-    addImages
+    addImages,
+    normName,
+    normPath,
+    getOrCreateCategoryBySupplierPath,
+    upsertCategoryPathNormalized,
 };
