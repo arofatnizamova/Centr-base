@@ -1,6 +1,5 @@
 const { db } = require("./core/db");
 
-// 1) создаём таблицы/триггеры
 const sql = `
 PRAGMA foreign_keys = ON;
 
@@ -127,12 +126,10 @@ CREATE TABLE IF NOT EXISTS supplier_category_map (
 `;
 db.exec(sql);
 
-// 2) добавляем колонку нормализации и заполняем (если ещё нет)
 try {
   db.exec(`
     ALTER TABLE category ADD COLUMN name_normalized TEXT;
   `);
-  // колонку добавили впервые — заполним
   db.exec(`
     UPDATE category
     SET name_normalized = LOWER(REPLACE(REPLACE(TRIM(name),'  ',' '),'ё','е'))
@@ -140,7 +137,6 @@ try {
   `);
   console.log("Поле name_normalized добавлено и заполнено");
 } catch (e) {
-  // колонка уже есть — можно дозаполнить на всякий случай
   db.exec(`
     UPDATE category
     SET name_normalized = COALESCE(name_normalized,
@@ -151,7 +147,6 @@ try {
   console.log("Поле name_normalized уже существует — дозаполнили пустые");
 }
 
-// 3) индексы (ускорят поиск категорий и supplier map)
 try {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_category_norm_parent
@@ -161,7 +156,6 @@ try {
   `);
 } catch (e) { }
 
-// 4) базовые поставщики
 const ins = db.prepare("INSERT OR IGNORE INTO supplier(code, name) VALUES (?, ?)");
 ins.run("generalclimate", "General Climate");
 ins.run("euroklimate", "Euroklimat (EK)");
